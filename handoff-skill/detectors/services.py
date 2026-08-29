@@ -153,10 +153,54 @@ def _detect_ssh_keys() -> list[str]:
     return keys
 
 
+def _generate_restart_hints(services: list[dict], deploy_info: dict) -> dict:
+    """Generate restart command hints based on detected service management."""
+    hints = {
+        "backend_restart": [],
+        "frontend_restart": [],
+        "deploy_commands": [],
+        "notes": [],
+    }
+
+    for svc in services:
+        name = svc.get("name", "")
+        source = svc.get("source", "")
+
+        if source == "launchd":
+            plist_path = f"~/Library/LaunchAgents/{name}.plist"
+            hints["backend_restart"].append(
+                f"launchctl unload {plist_path}; sleep 2; launchctl load {plist_path}"
+            )
+            if any(kw in name.lower() for kw in ("dashboard", "frontend", "next", "web")):
+                hints["frontend_restart"].append(
+                    f"launchctl unload {plist_path}; sleep 2; launchctl load {plist_path}"
+                )
+
+        elif source == "docker-compose":
+            hints["backend_restart"].append(f"docker-compose restart {name}")
+
+        elif source == "brew":
+            hints["backend_restart"].append(f"brew services restart {name}")
+
+    if deploy_info.get("has_deploy_script"):
+        hints["deploy_commands"] = deploy_info.get("commands", [])[:5]
+
+    hints["backend_restart"] = list(dict.fromkeys(hints["backend_restart"]))
+    hints["frontend_restart"] = list(dict.fromkeys(hints["frontend_restart"]))
+
+    if not hints["backend_restart"]:
+        hints["notes"].append("No backend service manager detected -- restart command unknown, ask user or check docs.")
+    if not hints["frontend_restart"]:
+        hints["notes"].append("No frontend service manager detected -- frontend may use hot reload (next dev / vite).")
+
+    return hints
+
+
 def main():
     root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path.cwd()
     project_name = root.name
     result = detect_services(root, project_name)
+    result["restart_hints"] = _generate_restart_hints(result["services"], result.get("deploy", {}))
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

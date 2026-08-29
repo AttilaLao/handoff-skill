@@ -164,12 +164,68 @@ def _python_frameworks(pyproject: Path) -> list:
         return []
 
 
+def _generate_dev_hints(tech_stack: dict) -> dict:
+    """Generate development workflow hints based on detected tech stack."""
+    languages = tech_stack.get("languages", [])
+    frameworks = tech_stack.get("frameworks", [])
+    tools = tech_stack.get("tools", [])
+
+    hints = {
+        "backend_hot_reload": False,
+        "backend_note": "",
+        "frontend_hot_reload": False,
+        "frontend_note": "",
+    }
+
+    # Backend
+    if "Python" in languages:
+        fw_lower = [f.lower() for f in frameworks]
+        if "fastapi" in fw_lower:
+            hints["backend_note"] = "FastAPI with uvicorn --reload auto-reloads; without --reload, restart manually."
+        elif "flask" in fw_lower:
+            hints["backend_note"] = "Flask with debug=True auto-reloads; otherwise restart manually."
+        elif "django" in fw_lower:
+            hints["backend_note"] = "Django runserver auto-reloads in debug mode; otherwise restart manually."
+        else:
+            hints["backend_note"] = "Python backend -- restart service manually after code changes."
+    elif "Go" in languages:
+        hints["backend_note"] = "Go backend -- recompile and restart after code changes."
+    elif "Rust" in languages:
+        hints["backend_note"] = "Rust backend -- cargo build and restart after code changes."
+    elif "Node.js" in languages:
+        fw_lower = [f.lower() for f in frameworks]
+        if "next" in fw_lower:
+            hints["backend_note"] = "Next.js API routes -- next dev auto-reloads."
+        elif "express" in fw_lower or "fastify" in fw_lower:
+            hints["backend_note"] = "Node backend -- use nodemon/tsx watch for auto-reload, otherwise restart manually."
+        else:
+            hints["backend_note"] = "Node.js backend -- restart manually unless using nodemon/tsx watch."
+
+    # Frontend
+    fw_lower = [f.lower() for f in frameworks]
+    if "next" in fw_lower or "react" in fw_lower:
+        hints["frontend_hot_reload"] = True
+        hints["frontend_note"] = "Next.js/React dev mode -- hot reload, save to apply."
+    elif "vue" in fw_lower or "nuxt" in fw_lower:
+        hints["frontend_hot_reload"] = True
+        hints["frontend_note"] = "Vue/Nuxt dev mode -- hot reload, save to apply."
+    elif "svelte" in fw_lower or "astro" in fw_lower:
+        hints["frontend_hot_reload"] = True
+        hints["frontend_note"] = "Svelte/Astro dev mode -- hot reload, save to apply."
+    elif "Node.js" in languages:
+        hints["frontend_note"] = "Node.js frontend -- check if using dev server with HMR."
+
+    return hints
+
+
 def main():
     root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path.cwd()
+    tech_stack = detect_tech_stack(root)
     result = {
         "name": detect_project_name(root),
         "path": str(root.resolve()),
-        "tech_stack": detect_tech_stack(root),
+        "tech_stack": tech_stack,
+        "dev_hints": _generate_dev_hints(tech_stack),
     }
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
