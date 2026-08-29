@@ -83,6 +83,43 @@ python3 detectors/knowledge.py search {项目名} $CWD  # 查询列表 + fallbac
 
 列出生成的文件路径和关键摘要。
 
+## 开发工作流规则（生成交接文档时必须包含）
+
+生成的 `AGENTS_HANDOFF.md` 中必须包含「开发期间必须记住的规则」段落，内容根据项目技术栈自动填充：
+
+### 后端代码改动
+- **Python (FastAPI/Flask/Django)** → 改完代码必须重启服务进程才生效（uvicorn/gunicorn 等不会自动热更新）
+- **Node.js 后端** → 如果用 `nodemon`/`tsx watch` 则自动热更新，否则需手动重启
+- **Go** → 需重新编译 + 重启
+- **Rust** → 需 `cargo build` + 重启
+
+### 前端代码改动
+- **Next.js dev mode** → 热更新，保存即生效
+- **Vite dev** → 热更新，保存即生效
+- **生产构建** → 需 `npm run build` + 部署
+
+### 服务重启命令
+根据探测到的服务管理方式自动填充：
+- **launchd** → `launchctl unload/load ~/Library/LaunchAgents/{plist}`
+- **docker-compose** → `docker-compose restart {service}`
+- **docker run** → `docker stop/rm/run {container}`
+- **systemd** → `systemctl restart {service}`
+- **pm2** → `pm2 restart {app}`
+
+### 线上部署路径
+根据探测结果标注：
+- 前端 → 构建命令 + 部署命令（如 wrangler pages deploy / vercel deploy / scp + nginx）
+- 后端 → 代码同步方式（scp / git push / docker build）+ 重启方式
+- 如果项目有 `deploy.sh` → 读取并提取关键命令
+
+### 新对话接手检查
+生成的文档必须包含「新对话接手步骤」段落：
+1. 确认本地服务是否在跑（给出 curl 健康检查命令）
+2. 服务不通时的启动命令
+3. 确认线上服务是否正常
+4. 读取项目特定文档（从知识库或 AGENTS.md 推断）
+5. **改完代码后必须重启哪些服务**（明确列出，不能遗漏）
+
 ## 安全规则
 
 1. 凭据只显示"已配置/未配置"，不显示值
