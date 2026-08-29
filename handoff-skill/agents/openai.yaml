@@ -1,0 +1,8 @@
+interface:
+  display_name: "Handoff Skill"
+  short_description: "自动生成项目无缝衔接交接文档，确保新对话快速接手继续"
+  tags:
+    - handoff
+    - 交接
+    - documentation
+  version: "1.0.0"
