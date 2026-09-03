@@ -16,7 +16,7 @@ description: Generate handoff documents when switching between Codex threads for
 
 ## 核心流程
 
-严格按以下 6 步执行，每步完成后再进入下一步。
+严格按以下 7 步执行，每步完成后再进入下一步。**跳过任何一步都会导致交接文档不完整，新对话接手时遗漏关键信息。**
 
 ### 第 0 步：确定项目身份
 
@@ -39,7 +39,9 @@ cwd 即为项目根目录。项目名按优先级从以下来源推断:
 
 **1d. 交接文档检查** — 检查 `AGENTS_HANDOFF.md` 是否存在，决定增量更新还是全新创建。
 
-### 第 2 步：知识库查询
+### 第 2 步：知识库查询（不能跳过）
+
+**这一步是强制的。** 即使你觉得自己已经知道项目上下文，也必须执行查询。知识库里可能有你不知道的事故记录和架构决策。
 
 **2a. 获取查询列表** — 运行 `python3 detectors/knowledge.py search {项目名} $CWD`，脚本返回需要查询的关键词列表和本地 fallback 文档路径。
 
@@ -52,25 +54,34 @@ cwd 即为项目根目录。项目名按优先级从以下来源推断:
 
 **Fallback:** `memory_search` 不可用时，读取 `detectors/knowledge.py search` 返回的 `fallback_sources` 中列出的本地文档（`AGENTS.md`, `README.md`, `HANDOFF_*.md`, `deploy.sh`）。
 
-### 第 3 步：生成文档
+### 第 3 步：生成文档（必须产出两个文件）
 
 先运行探测器收集数据（可并行）:
 
 ```bash
-python3 detectors/project.py $CWD       # 项目名、路径、技术栈
+python3 detectors/project.py $CWD       # 项目名、路径、技术栈、dev_hints
 python3 detectors/git.py $CWD           # git log、改动文件、日期范围
-python3 detectors/services.py $CWD      # 服务列表、deploy.sh、SSH 密钥
+python3 detectors/services.py $CWD      # 服务列表、deploy.sh、SSH 密钥、restart_hints
 python3 detectors/knowledge.py search {项目名} $CWD  # 查询列表 + fallback 文档
 ```
 
-然后根据探测结果 + 知识库查询结果，填充 `templates/` 下的两个模板:
+然后根据探测结果 + 知识库查询结果，填充 `templates/` 下的两个模板。
+**两个文件都必须生成，缺一不可:**
 
-- **文件一: `AGENTS_HANDOFF.md`** → 精简版，持续覆盖更新。已存在时增量更新（保留旧改动摘要追加新章节，服务/凭据/配置全量替换，待办合并去重）。第 2c 步查到的事故教训写入"关键配置提醒"段落。
-- **文件二: `HANDOFF_{YYYY-MM-DD}_{简述}.md`** → 详细版，每次新建不复写。
+- **文件一: `AGENTS_HANDOFF.md`** → 精简版，持续覆盖更新。已存在时增量更新（保留旧改动摘要追加新章节，服务/凭据/配置全量替换，待办合并去重）。
+  - 必须包含模板中的所有段落，不能省略任何一个
+  - 「开发期间必须记住的规则」段落：从 `project.py` 的 `dev_hints` 字段取 backend/frontend 热更新状态，从 `services.py` 的 `restart_hints` 字段取具体重启命令
+  - 「新对话接手步骤」段落：给出具体的 curl 健康检查命令和启动命令（从 `services.py` 的 `restart_hints` 取）
+  - 「当前服务状态」表格：必须列出探测器发现的所有服务，包括 PostgreSQL、Redis、cloudflared 等基础设施服务，状态不明的标注 `unknown`
+  - 第 2c 步查到的事故教训写入"关键配置提醒"段落
+
+- **文件二: `HANDOFF_{YYYY-MM-DD}_{简述}.md`** → 详细版，每次新建不复写。必须包含完整代码片段（从 git diff 提取修改前后对比）、复现命令、踩坑记录。
 
 ### 第 4 步：知识库回写
 
 运行 `python3 detectors/knowledge.py add "{标题}" "{内容}" {项目名} "{逗号分隔标签}"` 获取回写参数，然后你用 `memory_add` 工具执行写入。脚本只准备参数，实际 MCP 调用由你完成。
+
+**如果第 2 步的 memory_search 没有执行（MCP 不可用），则本步也跳过。但如果 MCP 可用而你跳过了第 2 步，这是错误 — 必须回去执行第 2 步。**
 
 回写内容:
 - 架构变更 → `memory_add`
@@ -79,9 +90,20 @@ python3 detectors/knowledge.py search {项目名} $CWD  # 查询列表 + fallbac
 
 标签统一 `["交接", "{项目名}"]`，confidence 0.8-1.0。不写入凭据值。
 
-### 第 5 步：展示结果
+### 第 5 步：验证完整性（强制，不能跳过）
 
-列出生成的文件路径和关键摘要。
+生成两个文件后，逐项检查以下清单。**任何一项不满足都必须回到第 3 步补全:**
+
+- [ ] `AGENTS_HANDOFF.md` 已生成
+- [ ] `HANDOFF_{YYYY-MM-DD}_{简述}.md` 已生成（第二个文件，不能省略）
+- [ ] AGENTS_HANDOFF.md 包含「开发期间必须记住的规则」段落，且有具体的重启命令（不是占位符）
+- [ ] AGENTS_HANDOFF.md 包含「新对话接手步骤」段落，且有 curl 健康检查命令
+- [ ] AGENTS_HANDOFF.md 的「当前服务状态」表格包含探测器发现的所有服务
+- [ ] AGENTS_HANDOFF.md 包含「关键配置提醒」，如有事故记录则用 `⚠️ 禁止:` 标注
+
+### 第 6 步：展示结果
+
+列出生成的两个文件路径和关键摘要。
 
 ## 开发工作流规则（生成交接文档时必须包含）
 
