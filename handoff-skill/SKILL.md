@@ -5,148 +5,84 @@ description: Generate handoff documents when switching between Codex threads for
 
 # Handoff Skill — 无缝衔接
 
-通用的项目交接文档生成 skill。触发后自动感知项目环境，生成 `AGENTS_HANDOFF.md` 和详细日期文件，确保新对话能无缝接手。
+触发后自动感知项目环境，生成 `AGENTS_HANDOFF.md` 和详细日期文件，确保新对话能无缝接手。
+
+## 最常见的三个错误（每次执行前默念）
+
+1. **只生成了一个文件** — 必须生成 AGENTS_HANDOFF.md 和 HANDOFF_日期_简述.md 两个文件
+2. **没查知识库** — 即使自认为了解项目，也必须用 memory_search 查事故和禁止操作
+3. **开发工作流规则是空占位符** — 必须从探测器的 dev_hints 和 restart_hints 字段取具体值填入
 
 ## 触发词
 
-用户消息中出现以下任一短语时激活:
-- "写无缝衔接" / "写交接" / "换聊天" / "无缝衔接"
-- "handoff" / "交接文档" / "写交接文档"
-- 或通过 `$handoff-skill` 显式调用
+"写无缝衔接" / "写交接" / "换聊天" / "无缝衔接" / "handoff" / "交接文档" / "写交接文档" / `$handoff-skill`
 
-## 核心流程
-
-严格按以下 7 步执行，每步完成后再进入下一步。**跳过任何一步都会导致交接文档不完整，新对话接手时遗漏关键信息。**
+## 核心流程（7 步，必须全部执行）
 
 ### 第 0 步：确定项目身份
 
-cwd 即为项目根目录。项目名按优先级从以下来源推断:
-1. `package.json` → `name` 字段
-2. `pyproject.toml` → `[project] name`
-3. `Cargo.toml` → `[package] name`
-4. `go.mod` → module 路径最后一段
-5. 目录名
+cwd 即项目根目录。项目名按优先级推断：package.json name → pyproject.toml name → Cargo.toml name → go.mod → 目录名。
 
-### 第 1 步：项目环境探测
+### 第 1 步：项目环境探测（并行，不询问用户）
 
-并行执行，不询问用户。
-
-**1a. 技术栈扫描** — 检查 `package.json` / `pyproject.toml` / `Cargo.toml` / `go.mod` / `Dockerfile` / `docker-compose.yml` 等。探测器自动扫描根目录和两级子目录（适配 `project/sub-project/app/` 结构）。
-
-**1b. 服务架构** — 读取 `docker-compose.yml`（根目录 + 子目录）提取服务和端口；扫描 `~/Library/LaunchAgents/` 下 plist 内容匹配项目路径或前缀（不只看文件名）；运行 `brew services list`；读取 `deploy.sh` 提取部署命令；检查 SSH 密钥存在性。
-
-**1c. Git 状态** — `git log --oneline -10` + `git diff --name-only` 获取近期改动和日期范围。
-
-**1d. 交接文档检查** — 检查 `AGENTS_HANDOFF.md` 是否存在，决定增量更新还是全新创建。
-
-### 第 2 步：知识库查询（不能跳过）
-
-**这一步是强制的。** 即使你觉得自己已经知道项目上下文，也必须执行查询。知识库里可能有你不知道的事故记录和架构决策。
-
-**2a. 获取查询列表** — 运行 `python3 detectors/knowledge.py search {项目名} $CWD`，脚本返回需要查询的关键词列表和本地 fallback 文档路径。
-
-**2b. 逐条查询** — 拿到查询列表后，你自己用 `memory_search` 工具逐条执行查询。脚本不能直接调 MCP，这一步必须由你（LLM）完成。
-
-**2c. 事故记录查询（强制）** — 额外执行 `memory_search("{项目名} 事故")` 和 `memory_search("{项目名} 禁止")`。如果查到事故记录：
-- 提取事故教训
-- 写入 `AGENTS_HANDOFF.md` 的"关键配置提醒"段落
-- 用 `⚠️ 禁止: {操作}` 格式标注，确保新对话不会重蹈覆辙
-
-**Fallback:** `memory_search` 不可用时，读取 `detectors/knowledge.py search` 返回的 `fallback_sources` 中列出的本地文档（`AGENTS.md`, `README.md`, `HANDOFF_*.md`, `deploy.sh`）。
-
-### 第 3 步：生成文档（必须产出两个文件）
-
-先运行探测器收集数据（可并行）:
+运行 4 个探测器：
 
 ```bash
-python3 detectors/project.py $CWD       # 项目名、路径、技术栈、dev_hints
-python3 detectors/git.py $CWD           # git log、改动文件、日期范围
-python3 detectors/services.py $CWD      # 服务列表、deploy.sh、SSH 密钥、restart_hints
+python3 detectors/project.py $CWD    # 项目名、技术栈、dev_hints
+python3 detectors/git.py $CWD        # git log、改动文件、日期范围
+python3 detectors/services.py $CWD   # 服务列表、deploy.sh、SSH 密钥、restart_hints
 python3 detectors/knowledge.py search {项目名} $CWD  # 查询列表 + fallback 文档
 ```
 
-然后根据探测结果 + 知识库查询结果，填充 `templates/` 下的两个模板。
-**两个文件都必须生成，缺一不可:**
+同时检查 `AGENTS_HANDOFF.md` 是否已存在（决定增量更新还是全新创建）。
 
-- **文件一: `AGENTS_HANDOFF.md`** → 精简版，持续覆盖更新。已存在时增量更新（保留旧改动摘要追加新章节，服务/凭据/配置全量替换，待办合并去重）。
-  - 必须包含模板中的所有段落，不能省略任何一个
-  - 「开发期间必须记住的规则」段落：从 `project.py` 的 `dev_hints` 字段取 backend/frontend 热更新状态，从 `services.py` 的 `restart_hints` 字段取具体重启命令
-  - 「新对话接手步骤」段落：给出具体的 curl 健康检查命令和启动命令（从 `services.py` 的 `restart_hints` 取）
-  - 「当前服务状态」表格：必须列出探测器发现的所有服务，包括 PostgreSQL、Redis、cloudflared 等基础设施服务，状态不明的标注 `unknown`
-  - 第 2c 步查到的事故教训写入"关键配置提醒"段落
+### 第 2 步：知识库查询（不能跳过）
 
-- **文件二: `HANDOFF_{YYYY-MM-DD}_{简述}.md`** → 详细版，每次新建不复写。必须包含完整代码片段（从 git diff 提取修改前后对比）、复现命令、踩坑记录。
+即使你觉得自己已经知道项目上下文，也必须执行。知识库里可能有你不知道的事故记录。
+
+1. 从 `knowledge.py search` 输出拿到查询列表
+2. 用 `memory_search` 逐条查询（脚本不能调 MCP，必须你来）
+3. 额外查 `memory_search("{项目名} 事故")` 和 `memory_search("{项目名} 禁止")`
+4. 查到的事故用 `⚠️ 禁止: {操作}` 格式写入关键配置提醒段落
+5. MCP 不可用时 fallback 到 knowledge.py 返回的 fallback_sources 本地文档
+
+### 第 3 步：生成文档（必须产出两个文件，缺一不可）
+
+**文件一：`AGENTS_HANDOFF.md`** — 精简版，用 `templates/handoff.md.tmpl`。已存在则增量更新。
+- 必须包含模板中的所有段落，不能省略
+- 「开发期间必须记住的规则」：从 project.py 的 `dev_hints` 取热更新状态，从 services.py 的 `restart_hints` 取重启命令
+- 「新对话接手步骤」：给出具体 curl 健康检查命令和启动命令
+- 「当前服务状态」表格：列出探测器发现的所有服务（含 PostgreSQL、Redis 等基础设施），不明的标 unknown
+- 技术栈到重启命令的映射参考 [references/workflow-rules.md](references/workflow-rules.md)
+
+**文件二：`HANDOFF_{YYYY-MM-DD}_{简述}.md`** — 详细版，用 `templates/detail.md.tmpl`，每次新建不复写。
+- 必须包含完整代码片段（git diff 修改前后对比）、复现命令、踩坑记录
 
 ### 第 4 步：知识库回写
 
-运行 `python3 detectors/knowledge.py add "{标题}" "{内容}" {项目名} "{逗号分隔标签}"` 获取回写参数，然后你用 `memory_add` 工具执行写入。脚本只准备参数，实际 MCP 调用由你完成。
-
-**如果第 2 步的 memory_search 没有执行（MCP 不可用），则本步也跳过。但如果 MCP 可用而你跳过了第 2 步，这是错误 — 必须回去执行第 2 步。**
-
-回写内容:
-- 架构变更 → `memory_add`
-- 事故记录 → `memory_add`
-- 重要决策 → `memory_add`
-
-标签统一 `["交接", "{项目名}"]`，confidence 0.8-1.0。不写入凭据值。
+用 `memory_add` 回写架构变更、事故记录、重要决策。标签 `["交接", "{项目名}"]`，不写凭据值。
+MCP 不可用则跳过。但如果 MCP 可用而你跳过了第 2 步，这是错误 — 必须回去执行第 2 步。
 
 ### 第 5 步：验证完整性（强制，不能跳过）
 
-生成两个文件后，逐项检查以下清单。**任何一项不满足都必须回到第 3 步补全:**
+逐项检查，**任何一项不满足都必须回到第 3 步补全：**
 
-- [ ] `AGENTS_HANDOFF.md` 已生成
-- [ ] `HANDOFF_{YYYY-MM-DD}_{简述}.md` 已生成（第二个文件，不能省略）
-- [ ] AGENTS_HANDOFF.md 包含「开发期间必须记住的规则」段落，且有具体的重启命令（不是占位符）
-- [ ] AGENTS_HANDOFF.md 包含「新对话接手步骤」段落，且有 curl 健康检查命令
-- [ ] AGENTS_HANDOFF.md 的「当前服务状态」表格包含探测器发现的所有服务
-- [ ] AGENTS_HANDOFF.md 包含「关键配置提醒」，如有事故记录则用 `⚠️ 禁止:` 标注
+- [ ] AGENTS_HANDOFF.md 已生成
+- [ ] HANDOFF_{YYYY-MM-DD}_{简述}.md 已生成（第二个文件，不能省略）
+- [ ] 「开发期间必须记住的规则」有具体的重启命令（不是占位符 {xxx}）
+- [ ] 「新对话接手步骤」有 curl 健康检查命令
+- [ ] 「当前服务状态」表格包含探测器发现的所有服务
+- [ ] 「关键配置提醒」包含事故记录（如有），用 `⚠️ 禁止:` 标注
 
 ### 第 6 步：展示结果
 
 列出生成的两个文件路径和关键摘要。
 
-## 开发工作流规则（生成交接文档时必须包含）
-
-生成的 `AGENTS_HANDOFF.md` 中必须包含「开发期间必须记住的规则」段落，内容根据项目技术栈自动填充：
-
-### 后端代码改动
-- **Python (FastAPI/Flask/Django)** → 改完代码必须重启服务进程才生效（uvicorn/gunicorn 等不会自动热更新）
-- **Node.js 后端** → 如果用 `nodemon`/`tsx watch` 则自动热更新，否则需手动重启
-- **Go** → 需重新编译 + 重启
-- **Rust** → 需 `cargo build` + 重启
-
-### 前端代码改动
-- **Next.js dev mode** → 热更新，保存即生效
-- **Vite dev** → 热更新，保存即生效
-- **生产构建** → 需 `npm run build` + 部署
-
-### 服务重启命令
-根据探测到的服务管理方式自动填充：
-- **launchd** → `launchctl unload/load ~/Library/LaunchAgents/{plist}`
-- **docker-compose** → `docker-compose restart {service}`
-- **docker run** → `docker stop/rm/run {container}`
-- **systemd** → `systemctl restart {service}`
-- **pm2** → `pm2 restart {app}`
-
-### 线上部署路径
-根据探测结果标注：
-- 前端 → 构建命令 + 部署命令（如 wrangler pages deploy / vercel deploy / scp + nginx）
-- 后端 → 代码同步方式（scp / git push / docker build）+ 重启方式
-- 如果项目有 `deploy.sh` → 读取并提取关键命令
-
-### 新对话接手检查
-生成的文档必须包含「新对话接手步骤」段落：
-1. 确认本地服务是否在跑（给出 curl 健康检查命令）
-2. 服务不通时的启动命令
-3. 确认线上服务是否正常
-4. 读取项目特定文档（从知识库或 AGENTS.md 推断）
-5. **改完代码后必须重启哪些服务**（明确列出，不能遗漏）
-
 ## 安全规则
 
-1. 凭据只显示"已配置/未配置"，不显示值
+1. 凭据只显示"已配置/未配置"
 2. 不输出 SSH 私钥路径
-3. 禁止操作用 `⚠️ 禁止:` 格式标注
+3. 禁止操作用 `⚠️ 禁止:` 标注
 4. 知识库回写不含密钥
 
 ## 边界情况
@@ -159,6 +95,7 @@ python3 detectors/knowledge.py search {项目名} $CWD  # 查询列表 + fallbac
 
 - `templates/handoff.md.tmpl` — AGENTS_HANDOFF.md 模板
 - `templates/detail.md.tmpl` — 详细日期文件模板
+- `references/workflow-rules.md` — 技术栈到重启命令映射参考
 - `detectors/project.py` — 项目身份和技术栈探测
 - `detectors/services.py` — 服务架构探测
 - `detectors/git.py` — Git 状态探测
