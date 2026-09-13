@@ -12,6 +12,7 @@ description: Generate handoff documents when switching between Codex threads for
 1. **只生成了一个文件** — 必须生成 AGENTS_HANDOFF.md 和 HANDOFF_日期_简述.md 两个文件
 2. **没查知识库** — 即使自认为了解项目，也必须用 memory_search 查事故和禁止操作
 3. **开发工作流规则是空占位符** — 必须从探测器的 dev_hints 和 restart_hints 字段取具体值填入
+4. **文件生成在错误目录** — AGENTS_HANDOFF.md 必须生成在实际项目根目录（有 package.json 的那个），不是 cwd。新对话可能在上级目录启动，找不到文件。
 
 ## 触发词
 
@@ -19,9 +20,20 @@ description: Generate handoff documents when switching between Codex threads for
 
 ## 核心流程（7 步，必须全部执行）
 
-### 第 0 步：确定项目身份
+### 第 0 步：确定项目根目录和身份
 
-cwd 即项目根目录。项目名按优先级推断：package.json name → pyproject.toml name → Cargo.toml name → go.mod → 目录名。
+**不要盲信 cwd。** cwd 可能是项目的上级目录。按以下逻辑确定实际项目根目录：
+
+1. 检查 cwd 是否有 package.json / pyproject.toml / Cargo.toml / go.mod / Dockerfile
+2. 如果 cwd 没有这些文件，检查一级子目录里哪个有（如 `cwd/fashion-site/package.json`）
+3. 找到后，**项目根目录 = 该子目录**，不是 cwd
+4. 如果 cwd 和子目录都有，优先用 cwd
+5. 如果都没找到，项目根目录 = cwd
+
+**后续所有步骤都基于项目根目录，不是 cwd。** AGENTS_HANDOFF.md 生成在项目根目录下。
+
+项目名按优先级推断：package.json name → pyproject.toml name → Cargo.toml name → go.mod → 目录名。
+如果项目根目录是 cwd 的子目录，在生成文档的「新对话接手步骤」中写明 `cd {子目录名}` 作为第一步。
 
 ### 第 1 步：项目环境探测（并行，不询问用户）
 
@@ -34,7 +46,7 @@ python3 detectors/services.py $CWD   # 服务列表、deploy.sh、SSH 密钥、r
 python3 detectors/knowledge.py search {项目名} $CWD  # 查询列表 + fallback 文档
 ```
 
-同时检查 `AGENTS_HANDOFF.md` 是否已存在（决定增量更新还是全新创建）。
+同时在**项目根目录**（不是 cwd）检查 `AGENTS_HANDOFF.md` 是否已存在（决定增量更新还是全新创建）。如果项目根目录是 cwd 的子目录，探测器参数用项目根目录路径。
 
 ### 第 2 步：知识库查询（不能跳过）
 
@@ -67,7 +79,7 @@ MCP 不可用则跳过。但如果 MCP 可用而你跳过了第 2 步，这是�
 
 逐项检查，**任何一项不满足都必须回到第 3 步补全：**
 
-- [ ] AGENTS_HANDOFF.md 已生成
+- [ ] AGENTS_HANDOFF.md 已生成在**项目根目录**（有 package.json 的目录，不是 cwd）
 - [ ] HANDOFF_{YYYY-MM-DD}_{简述}.md 已生成（第二个文件，不能省略）
 - [ ] 「开发期间必须记住的规则」有具体的重启命令（不是占位符 {xxx}）
 - [ ] 「新对话接手步骤」有 curl 健康检查命令
